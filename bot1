@@ -103,9 +103,9 @@ async def handle_admin_messages(message: Message):
 
     # اگر پیام ریپلی داشت، به کاربر ریپلی شده ارسال کن
     if message.reply_to_message:
-        # استخراج Chat ID کاربر از پیام ریپلی شده
-        user_id = message.reply_to_message.forward_from_chat.id if message.reply_to_message.forward_from_chat else message.reply_to_message.chat.id
-        
+        # ✅ راه‌حل صحیح و ساده
+        user_id = message.reply_to_message.from_user.id
+
         try:
             await bot.send_message(
                 user_id,
@@ -123,9 +123,7 @@ async def handle_admin_messages(message: Message):
             "یا از دستورات زیر استفاده کنید:\n"
             "`/users` - لیست کاربران فعال\n"
             "`/broadcast` - ارسال پیام به همه کاربران"
-        )
-
-# =============================================
+        ) =============================================
 # 🚀 دستور شروع
 # =============================================
 @dp.message(Command("start"))
