@@ -1,15 +1,34 @@
-# launch.py
+import asyncio
 import subprocess
 import sys
 
-def run_bots():
-    # اجرای همزمان هر دو ربات
-    bot1 = subprocess.Popen([sys.executable, "bot1.py"])
-    bot2 = subprocess.Popen([sys.executable, "bot2.py"])
+async def run_bot(script_name):
+    """اجرای یک ربات و نمایش خروجی آن"""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, script_name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
     
-    # منتظر ماندن برای اتمام هر دو
-    bot1.wait()
-    bot2.wait()
+    # نمایش خروجی‌ها به صورت همزمان
+    while True:
+        line = await process.stdout.readline()
+        if not line:
+            break
+        print(f"[{script_name}] {line.decode().strip()}")
+    
+    return await process.wait()
+
+async def main():
+    # اجرای همزمان هر دو ربات
+    tasks = [
+        run_bot("bot1.py"),
+        run_bot("bot2.py")
+    ]
+    await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
-    run_bots()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("🛑 ربات‌ها متوقف شدند.")
