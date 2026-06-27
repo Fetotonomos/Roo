@@ -7,7 +7,7 @@ from aiogram.types import Message
 from rubpy import Client
 
 # =============================================
-# 🔧 تنظیمات
+# 🔧 تنظیماتb
 # =============================================
 BOT_TOKEN = "8970376348:AAGT2JpjjjGJgwfzVA8pbgnzTCTzxsvRaAE"  # توکن ربات ادمین
 ADMIN_CHAT_ID = 613623  # آیدی عددی خودت (فقط برای لاگ)
